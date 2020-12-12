@@ -1,161 +1,170 @@
 pragma solidity >=0.4.22 <0.6.0;
-// pragma solidity ^0.5.11;
-pragma experimental ABIEncoderV2;
+
 contract Supplychain{
+
+    struct Bank{
+	    address ad; //唯一标识
+        string name; //银行名字
+    }
+
     struct Company{
-        string name;
-        address ad;
-        uint creditRating;
+	    address ad; //唯一标识
+        string name; //公司名字
+        uint amount; //公司账户余额
+        uint creditValues; //信用额度
     }
 
     struct Receipt{
-        uint id;
-        address owner;
-        address client;
-        uint amount;
-        uint start;
-        uint ddl;
-        // uint rank;
-        bool usedLoan;
-        string description;
+        uint id; //唯一标识
+        address SME; //中小企业(收款方)
+        address core; //核心企业(欠款方)
+        uint amount; //金额
+        uint start_date; //开始时间
+        uint end_date; //还款时间
+        bool isLoan; //是否用来贷款
+        string info; //其他信息
     }
     
+    Bank public bank;
+    Company public core;
+
+    //地址到公司的映射
+    mapping(address => Company) public SMEs;
+
+    //应收款单据编号 1,2,3,...
+    uint rid;
+
     //等待签署的应收款单据
     mapping(uint => Receipt) public pending;
-
-    Company[]  companys;
-    Company[] public banks;
     
     //公司到应收帐款的映射
     mapping(address => Receipt[]) public receipts;
     
-    //应收款单据编号 1,2,3,...
-    uint rid;
-    
-    event ReceiptIssued(address owner, string desc);
-    event ReceiptSigned(address who, string desc);
-    event Transfered(address fromadd, address toadd,uint amount,string desc);
-    event Loaned(address who, uint amount,string desc);
-    event pay(address fromadd,address toadd,uint amount, string desc);
+    event ReceiptIssued(address SME, string desc);
+    event ReceiptSigned(address core, string desc);
+    event Transfered(address fromSME, address toSME, uint amount, string desc);
+    event Loaned(address bank, address SME, uint amount, string desc);
+    event pay(address core, address SME, uint amount, string desc);
     
     constructor() public {
         rid = 1;
     }
-    
 
-    
-    function AddBank(string _name,address _ad)public returns(bool){
-        banks.push(Company(_name,_ad,0));
+    function SetBank(string _name, address _ad) public returns(bool) {
+        require(_ad == msg.sender);
+        bank = Bank(_ad, _name);
+        return true;
+    }
+
+    function SetCore(string _name, address _ad, uint _amount) public returns(bool) {
+        require(_ad == msg.sender);
+        core = Company(_ad, _name, _amount, 1);
+        return true;
+    }
+
+    function AddSME(string _name, address _ad, uint _amount) public returns(bool) {
+        require(_ad == msg.sender);
+        SMEs[_ad] = Company(_ad, _name, _amount, 0);
         return true;
     }
     
-    //公司发起应收款单据
-    function IssueReceipt(address owner, address client, uint amount,uint ddl) public returns(uint id_){
-        require(msg.sender==owner);
-        pending[rid] = Receipt(rid,msg.sender,client,amount,now,now+ddl,false,"");
-        id_ = rid;
-        rid++;
-        emit ReceiptIssued(owner,"receipt Issued");
-    }
-    
-    //客户签署应收款单据
-    function SignReceipt(uint _id)public returns(bool){
-        Receipt r = pending[_id];
-        //签署人必须是该单据的client
-        require(r.client == msg.sender,"your don't have permission to sign this receipt.");
-        //单据未到期
-        require(now < r.ddl);
-        receipts[r.owner].push(Receipt(r.id, r.owner, r.client,r.amount,r.start,r.ddl,false,""));
-        emit ReceiptIssued(msg.sender,"receipt signed");
-        return true;
-    }
-    
-    // function AddReceipt(address owner, address client, uint amount)public returns(uint id_){
-    //     receipts[owner].push(Receipt(rid,owner,client,amount,now,now+1000000,false,""));
+    //中小企业发起应收账款单据
+    // function IssueReceipt(address SME, address core, uint amount, uint timeInterval, string info) public returns(uint id_) {
+    //     require(SME == msg.sender);
+    //     pending[rid] = Receipt(rid, SME, core, amount, now, now+timeInterval, false, info);
     //     id_ = rid;
     //     rid++;
+    //     emit ReceiptIssued(SME, "receipt Issued");
     // }
-    
-    function TransferTo(uint receiptid, address to, uint amount) public returns(uint id_){
-        Receipt storage senderReceipt;
-        for (uint i = 0; i < receipts[msg.sender].length;i++)
-        {
-            if (receipts[msg.sender][i].id==receiptid)
-            {
-                senderReceipt = receipts[msg.sender][i];
-                break;
-            }
-            require(i != receipts[msg.sender].length - 1,"no such receipt id.");
-        }
-
-        require(senderReceipt.amount >= amount && amount > 0);
-        //转移账款
-        senderReceipt.amount -=amount;
-        receipts[to].push(Receipt(rid,to, senderReceipt.client, amount, now,senderReceipt.ddl,false,""));
+    function IssueReceipt(address SME, uint amount, uint timeInterval, string info) public returns(uint id_) {
+        require(SME == msg.sender);
+        pending[rid] = Receipt(rid, SME, core, amount, now, now+timeInterval, false, info);
         id_ = rid;
         rid++;
-        Transfered(msg.sender, to, amount,"transfer successfully");
+        emit ReceiptIssued(msg.sender, "receipt Issued");
     }
     
-    function MakeLoan(address loanTo, uint loanAmount, uint receiptid) public returns(bool){
-        //放贷款必须是银行
-        uint  cnt = 0;
-        uint i;
-        for ( i = 0; i < banks.length; i++)
-        {
-            if (banks[i].ad == msg.sender)
-            {
-                cnt++;
+    //核心企业签署应收账款单据
+    function SignReceipt(uint receiptID) public returns(bool) {
+        Receipt r = pending[receiptID];
+        //签署人必须是核心企业
+        require(core == msg.sender, "your don't have permission to sign this receipt.");
+        //单据未到期
+        require(now < r.end_date);
+        //receipts[r.SME].push(Receipt(r.id, r.SME, r.core, r.amount, r.start_date, r.end_date, r.isLoan, r.info));
+        receipts[r.SME].push(r);
+        emit ReceiptIssued(msg.sender, "receipt signed");
+        return true;
+    }
+    
+    //中小企业转让应收账款
+    function TransferTo(uint receiptID, address to, uint amount) public returns(uint id_) {
+        Receipt storage fromReceipt;
+        uint len = receipts[msg.sender].length;
+        for (uint i = 0; i < len; i++) {
+            if (receipts[msg.sender][i].id == receiptID) {
+                fromReceipt = receipts[msg.sender][i];
+                break;
             }
+            require(i != receipts[msg.sender].length-1, "no such receipt id.");
         }
-        require(cnt == 1);
+
+        require(fromReceipt.amount >= amount && amount > 0);
+        //转移账款
+        fromReceipt.amount -= amount;
+        receipts[to].push(Receipt(rid, to, core, amount, now, fromReceipt.end_date, fromReceipt.isLoan, fromReceipt.info));
+        id_ = rid;
+        rid++;
+        emit Transfered(msg.sender, to, amount, "transfer successfully");
+    }
+    
+    function MakeLoan(address loanTo, uint loanAmount, uint receiptID) public returns(bool) {
+        //必须是银行发放贷款
+        require(bank == msg.sender);
         
         //找到应收款单据
         Receipt storage r;
-        for (i = 0; i < receipts[loanTo].length;i++)
-        {
-            if (receipts[loanTo][i].id==receiptid)
-            {
+        uint len = receipts[loanTo].length;
+        for (i = 0; i < len; i++) {
+            if (receipts[loanTo][i].id == receiptID) {
                 r = receipts[loanTo][i];
                 break;
             }
-            require(i != receipts[msg.sender].length - 1,"no such receipt id.");
+            require(i != receipts[msg.sender].length-1, "no such receipt id.");
         }
         
-        //false 说明该单据已经被用来贷款了
-        require(r.usedLoan==false,"the receipt has been used for loan");
-        require(r.amount >=loanAmount);
+        //true说明该单据已经被用来贷款了
+        require(r.isLoan == false, "the receipt has been used for loan");
+        require(r.amount >= loanAmount);
         
-        r.usedLoan = true;
-        Loaned(loanTo,loanAmount,"loaned successfully.");
+        r.isLoan = true;
+        emit Loaned(msg.sender, loanTo, loanAmount, "loaned successfully.");
         return true;
     }
     
-    function PayForReceipt(address owner, uint amount,uint receiptid) public returns(bool){
+    function PayForReceipt(address SME, uint amount, uint receiptID) public returns(bool) {
         Receipt storage r;
         uint i;
-        for (i = 0; i < receipts[owner].length;i++)
-        {
-            if (receipts[owner][i].id==receiptid)
-            {
-                r = receipts[owner][i];
+        uint len = receipts[SME].length;
+        for (i = 0; i < len; i++) {
+            if (receipts[SME][i].id == receiptID) {
+                r = receipts[SME][i];
                 break;
             }
             require(i != receipts[msg.sender].length - 1,"no such receipt id.");
         }
         
-        require(r.client == msg.sender,"sender doesn't match receipt's client");
+        require(r.core == msg.sender,"sender doesn't match receipt's client");
         require(r.amount >= amount,"payment exceeds receipt'amount");
         r.amount -= amount;
         if(r.amount > 0)
             return true;
-        for(;i<receipts[owner].length - 1;i++)
-        {
-            receipts[owner][i] = receipts[owner][i+1];
+        for(; i < len-1; i++) {
+            receipts[SME][i] = receipts[SME][i+1];
         }
         delete receipts[owner][i];
         //receipts[owner].length--;
-        pay(msg.sender, owner, amount,"pay for receipt successfully.");
+        emit pay(msg.sender, SME, amount, "pay for receipt successfully.");
         return true;
     }
     
